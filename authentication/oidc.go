@@ -372,10 +372,7 @@ func (a oidcAuthenticator) checkAuth(ctx context.Context, token string) (context
 		// We log it to allow the possibility of debugging this.
 		level.Debug(a.logger).Log("msg", msg, "err", err)
 
-		// The original HTTP implementation returned StatusInternalServerError.
-		// For gRPC we return Unknown, as we can't really
-		// be sure the problem is internal and not deserving Unauthenticated or InvalidArgument.
-		return ctx, msg, http.StatusInternalServerError, codes.Unknown
+		return ctx, msg, http.StatusUnauthorized, codes.Unauthenticated
 	}
 
 	sub := idToken.Subject

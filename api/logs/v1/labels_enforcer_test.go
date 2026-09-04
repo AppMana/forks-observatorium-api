@@ -158,7 +158,7 @@ func TestEnforceValuesOnQuery(t *testing.T) {
 				"query": []string{"{kubernetes_namespace_name=\"forbidden-ns|ns-name\", kubernetes_container_name=\"logger\", kubernetes_pod_name=\"pod-name\"}"},
 			},
 			expValues: url.Values{
-				"query": []string{"{kubernetes_namespace_name=~\"ns-name|another-ns-name|openshift-.*\", kubernetes_container_name=\"logger\", kubernetes_pod_name=\"pod-name\"}"},
+				"query": []string{"{kubernetes_namespace_name=\"forbidden-ns|ns-name\", kubernetes_namespace_name=~\"ns-name|another-ns-name|openshift-.*\", kubernetes_container_name=\"logger\", kubernetes_pod_name=\"pod-name\"}"},
 			},
 		},
 		{

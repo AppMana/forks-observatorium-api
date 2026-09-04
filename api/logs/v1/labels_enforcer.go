@@ -47,6 +47,21 @@ func WithEnforceAuthorizationLabels() func(http.Handler) http.Handler {
 
 				return
 			}
+			if strings.Contains(r.URL.Path, "/loki/api/") || strings.Contains(r.URL.Path, "/api/prom/") {
+				// Label-scoped reads must not forward an unenforced POST body or
+				// a new Loki endpoint whose selectors have not been audited.
+				if r.Method != http.MethodGet {
+					httperr.PrometheusAPIError(w, "label-scoped reads require GET", http.StatusMethodNotAllowed)
+					return
+				}
+				path := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+				switch path {
+				case "query", "query_range", "labels", "label", "values", "series", "tail":
+				default:
+					httperr.PrometheusAPIError(w, "endpoint does not support label-scoped reads", http.StatusForbidden)
+					return
+				}
+			}
 
 			var matchersInfo AuthzResponseData
 			if err := json.Unmarshal([]byte(data), &matchersInfo); err != nil {
@@ -71,13 +86,39 @@ func WithEnforceAuthorizationLabels() func(http.Handler) http.Handler {
 
 func enforceValues(mInfo AuthzResponseData, u *url.URL) (values string, err error) {
 	switch {
-	case strings.HasSuffix(u.Path, "/values"):
+	case strings.HasSuffix(u.Path, "/values"), strings.HasSuffix(u.Path, "/labels"), strings.HasSuffix(u.Path, "/label"):
 		return enforceValuesOnLogQL(mInfo, u.Query(), queryParam, false)
 	case strings.HasSuffix(u.Path, "/series"):
-		return enforceValuesOnLogQL(mInfo, u.Query(), matchParam, false)
+		v := u.Query()
+		param := "match[]"
+		if _, ok := v[param]; !ok {
+			param = matchParam
+		}
+		return enforceAllValuesOnLogQL(mInfo, v, param, false)
 	default:
 		return enforceValuesOnLogQL(mInfo, u.Query(), queryParam, true)
 	}
+}
+
+func enforceAllValuesOnLogQL(mInfo AuthzResponseData, v url.Values, param string, queryEndpoint bool) (string, error) {
+	inputs := v[param]
+	if len(inputs) == 0 {
+		return enforceValuesOnLogQL(mInfo, v, param, queryEndpoint)
+	}
+	outputs := make([]string, 0, len(inputs))
+	for _, value := range inputs {
+		encoded, err := enforceValuesOnLogQL(mInfo, url.Values{param: {value}}, param, queryEndpoint)
+		if err != nil {
+			return "", err
+		}
+		parsed, err := url.ParseQuery(encoded)
+		if err != nil {
+			return "", err
+		}
+		outputs = append(outputs, parsed.Get(param))
+	}
+	v[param] = outputs
+	return v.Encode(), nil
 }
 
 func enforceValuesOnLogQL(mInfo AuthzResponseData, v url.Values, paramName string, queryEndpoint bool) (values string, err error) {
@@ -135,21 +176,20 @@ func enforceValuesOnLogQL(mInfo AuthzResponseData, v url.Values, paramName strin
 
 // Combine the query label matcher and the authorization label matcher.
 func combineLabelMatchers(queryMatchers, authzMatchers []*labels.Matcher) []*labels.Matcher {
-	queryMatchersMap := make(map[string]*labels.Matcher)
-	for _, qm := range queryMatchers {
-		queryMatchersMap[qm.Name] = qm
-	}
-
-	matchers := make([]*labels.Matcher, 0)
+	matchers := append([]*labels.Matcher(nil), queryMatchers...)
 	for _, am := range authzMatchers {
-		qm := queryMatchersMap[am.Name]
-		if qm == nil || !am.Matches(qm.Value) {
-			queryMatchersMap[am.Name] = am
+		implied := false
+		for _, qm := range queryMatchers {
+			if qm.Name == am.Name && ((qm.Type == labels.MatchEqual && am.Matches(qm.Value)) || (qm.Type == am.Type && qm.Value == am.Value)) {
+				implied = true
+				break
+			}
 		}
-	}
-
-	for _, m := range queryMatchersMap {
-		matchers = append(matchers, m)
+		if !implied {
+			// Repeated label matchers are conjunctive. Preserve the caller's
+			// restriction instead of replacing it with a broader one.
+			matchers = append(matchers, am)
+		}
 	}
 
 	return matchers
