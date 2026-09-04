@@ -305,6 +305,10 @@ func (a oidcAuthenticator) Middleware() Middleware {
 			} else {
 				cookie, err := r.Cookie(a.cookieName)
 				if err != nil {
+					if a.config.RedirectURL == "" {
+						httperr.PrometheusAPIError(w, "failed to find token", http.StatusUnauthorized)
+						return
+					}
 					tenant, ok := GetTenant(r.Context())
 					if !ok {
 						const msg = "error finding tenant"

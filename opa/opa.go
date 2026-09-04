@@ -109,6 +109,7 @@ func (a *restAuthorizer) Authorize(
 		Subject:    subject,
 		Tenant:     tenant,
 		TenantID:   tenantID,
+		Token:      token,
 		Extras:     extras,
 	}
 

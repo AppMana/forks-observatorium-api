@@ -49,8 +49,8 @@ func TestWorkspaceLogAuthorization(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"issuer": issuer.URL, "jwks_uri": issuer.URL + "/keys", "authorization_endpoint": issuer.URL + "/authorize", "token_endpoint": issuer.URL + "/token", "id_token_signing_alg_values_supported": []string{"RS256"}})
 	}))
 	t.Cleanup(issuer.Close)
-	token := func(subject, audience, iss string, expires time.Time) string {
-		v := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": subject, "aud": audience, "iss": iss, "exp": expires.Unix(), "iat": time.Now().Add(-time.Minute).Unix()})
+	token := func(subject, audience, iss string, expires time.Time, groups ...string) string {
+		v := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": subject, "aud": audience, "iss": iss, "exp": expires.Unix(), "iat": time.Now().Add(-time.Minute).Unix(), "groups": groups})
 		v.Header["kid"] = "test"
 		signed, err := v.SignedString(key)
 		must(t, err)
@@ -86,7 +86,9 @@ func TestWorkspaceLogAuthorization(t *testing.T) {
 	get := func(path, bearer string, headers map[string]string) (int, string) {
 		req, err := http.NewRequest(http.MethodGet, base+path, nil)
 		must(t, err)
-		req.Header.Set("Authorization", "Bearer "+bearer)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
@@ -113,6 +115,24 @@ func TestWorkspaceLogAuthorization(t *testing.T) {
 		status, body := get("labels", token("outsider", "appmana-logs", issuer.URL, time.Now().Add(time.Hour)), nil)
 		if status != 403 {
 			t.Fatalf("expected 403, got %d %s", status, body)
+		}
+	})
+	t.Run("signed-cluster-admin-can-read-operational-namespaces", func(t *testing.T) {
+		status, body := get("label/namespace/values", token("operator", "appmana-logs", issuer.URL, time.Now().Add(time.Hour), "cluster-admin"), nil)
+		if status != 200 || !strings.Contains(body, "other-build") {
+			t.Fatalf("expected operational access, got %d %s", status, body)
+		}
+	})
+	t.Run("forged-group-headers-cannot-grant-admin", func(t *testing.T) {
+		status, body := get("label/namespace/values", ownerToken, map[string]string{"X-Forwarded-Groups": "cluster-admin", "X-Auth-Request-Groups": "cluster-admin"})
+		if status != 200 || strings.Contains(body, "other-build") {
+			t.Fatalf("headers changed resource scope: %d %s", status, body)
+		}
+	})
+	t.Run("admin-claim-with-wrong-audience-is-rejected", func(t *testing.T) {
+		status, body := get("labels", token("operator", "website", issuer.URL, time.Now().Add(time.Hour), "cluster-admin"), nil)
+		if status != 401 {
+			t.Fatalf("expected 401, got %d %s", status, body)
 		}
 	})
 	t.Run("post-body-cannot-bypass-selector-enforcement", func(t *testing.T) {
