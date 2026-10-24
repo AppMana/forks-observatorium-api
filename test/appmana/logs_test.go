@@ -65,8 +65,9 @@ func TestWorkspaceLogAuthorization(t *testing.T) {
 	opaPort, lokiPort, gatewayPort, internalPort := port(t), port(t), port(t), port(t)
 	opa := fmt.Sprintf("http://127.0.0.1:%d", opaPort)
 	loki := fmt.Sprintf("http://127.0.0.1:%d", lokiPort)
-	docker(t, "opa", "-v", policyDir+":/policy:ro", "-v", dir+":/fixtures:ro", "openpolicyagent/opa:1.8.0-static", "run", "--server", fmt.Sprintf("--addr=127.0.0.1:%d", opaPort), "/policy/workspace.rego", "/fixtures/data.json")
-	docker(t, "loki", "grafana/loki:3.5.3", "-config.file=/etc/loki/local-config.yaml", fmt.Sprintf("-server.http-listen-port=%d", lokiPort), "-server.http-listen-address=127.0.0.1", "-auth.enabled=false")
+	docker(t, "opa", "-v", policyDir+":/policy:ro", "-v", dir+":/fixtures:ro", "openpolicyagent/opa:1.21.4-static@sha256:47f93480b09e24c220ae75f1e9133585ba6d698059951668d35e6a4fc32ebc82", "run", "--server", fmt.Sprintf("--addr=127.0.0.1:%d", opaPort), "/policy/workspace.rego", "/fixtures/data.json")
+	// Keep fixture storage isolated from host disk-utilization thresholds.
+	docker(t, "loki", "--tmpfs", "/loki:rw,size=256m,mode=1777", "grafana/loki@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28", "-config.file=/etc/loki/local-config.yaml", fmt.Sprintf("-server.http-listen-port=%d", lokiPort), "-server.http-listen-address=127.0.0.1", "-auth.enabled=false", "-ingester.wal-dir=/loki/wal")
 	waitHTTP(t, opa+"/health")
 	waitHTTP(t, loki+"/ready")
 	tenants := fmt.Sprintf("tenants:\n- name: appmana\n  id: fake\n  oidc:\n    clientID: appmana-logs\n    issuerURL: %s\n    usernameClaim: sub\n  opa:\n    url: %s/v1/data/appmana/workspace_logs/decision\n", issuer.URL, opa)
@@ -74,7 +75,7 @@ func TestWorkspaceLogAuthorization(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(dir, "rbac.yaml"), []byte("roles: []\nroleBindings: []\n"), 0644))
 	logFile, err := os.Create(filepath.Join(dir, "gateway.log"))
 	must(t, err)
-	cmd := exec.Command(binary, "--tenants.config="+filepath.Join(dir, "tenants.yaml"), "--rbac.config="+filepath.Join(dir, "rbac.yaml"), fmt.Sprintf("--web.listen=127.0.0.1:%d", gatewayPort), fmt.Sprintf("--web.internal.listen=127.0.0.1:%d", internalPort), "--logs.read.endpoint="+loki, "--logs.tail.endpoint="+loki)
+	cmd := exec.Command(binary, "--tenants.config="+filepath.Join(dir, "tenants.yaml"), "--rbac.config="+filepath.Join(dir, "rbac.yaml"), fmt.Sprintf("--web.listen=127.0.0.1:%d", gatewayPort), fmt.Sprintf("--web.internal.listen=127.0.0.1:%d", internalPort), fmt.Sprintf("--web.healthchecks.url=http://127.0.0.1:%d", gatewayPort), "--logs.read.endpoint="+loki, "--logs.tail.endpoint="+loki)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	must(t, cmd.Start())
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait(); logFile.Close() })
@@ -241,7 +242,7 @@ func waitHTTP(t *testing.T, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := http.Get(endpoint)
+		res, err := (&http.Client{Timeout: 3 * time.Second}).Get(endpoint)
 		if err == nil {
 			res.Body.Close()
 			if res.StatusCode == 200 {

@@ -1,16 +1,17 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine as builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.23@sha256:754d5200fc3edae76d3b6598a9a3fac7e74981ee6a5413ab955025f185753ef2 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ENV GOTOOLCHAIN=local GOMAXPROCS=2
 
-RUN apk add --update --no-cache ca-certificates tzdata git make bash && update-ca-certificates
+RUN apk add --update --no-cache 'ca-certificates>=20261020-r0' tzdata git make bash && update-ca-certificates
 
 ADD . /opt
 WORKDIR /opt
 
 RUN git update-index --refresh; make build OS=${TARGETOS} ARCH=${TARGETARCH}
 
-FROM alpine:3.23 as runner
+FROM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS runner
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /opt/observatorium-api /bin/observatorium-api
