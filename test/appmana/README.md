@@ -10,8 +10,8 @@ go test ./api/logs/v1 ./authentication
 
 The policy path is resolved from the Go test package's working directory. Point
 it at the Helm chart's `files` directory when running outside the monorepo. The
-policy is not duplicated in this fork. Docker images are OPA 1.8.0-static and
-Loki 3.5.3. Tests create and remove their own Docker containers and gateway
+policy is not duplicated in this fork. Docker images are digest-pinned OPA 1.21.4-static and
+Loki 3.7.9. Tests create and remove their own Docker containers and gateway
 process, and never connect to a live Loki or Keycloak server.
 
 The test uses actual HTTP requests through the gateway executable, real OPA
